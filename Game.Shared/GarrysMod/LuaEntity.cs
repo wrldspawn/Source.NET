@@ -1442,7 +1442,10 @@ public static partial class LuaEntity
 				break;
 			case FieldType.Vector:
 			case FieldType.PositionVector:
-				g_Lua!.PushVector((Vector3)value!);
+				if (value is QAngle angle)
+					g_Lua!.PushVector(new Vector3(angle.X, angle.Y, angle.Z));
+				else
+					g_Lua!.PushVector((Vector3)value!);
 				break;
 			case FieldType.Integer:
 			case FieldType.Short:
@@ -1467,35 +1470,7 @@ public static partial class LuaEntity
 		}
 	}
 
-	[LuaMethod]
-	static int Entity__GetInternalVariable(ILuaInterface lua) {
-		BaseEntity ent = Get_Entity(1, false)!;
-		string name = lua.CheckString(2);
-
-		TypeDescription? td = null;
-		for (DataMap? map = ent.GetDataDescMap(); map != null && td == null; map = map.BaseMap) {
-			foreach (TypeDescription field in map.DataDesc) {
-				if (field.Flags != FieldTypeDescFlags.Input && (field.Flags & FieldTypeDescFlags.Output) == 0 && ((field.ExternalName.Length != 0 && stricmp(name, field.ExternalName) == 0) || (field.FieldName.Length != 0 && stricmp(name, field.FieldName) == 0))) {
-					td = field;
-					break;
-				}
-			}
-		}
-#if CLIENT_DLL
-		for (DataMap? map = ent.GetPredDescMap(); map != null && td == null; map = map.BaseMap) {
-			foreach (TypeDescription field in map.DataDesc) {
-				if (field.Flags != FieldTypeDescFlags.Input && (field.Flags & FieldTypeDescFlags.Output) == 0 && ((field.ExternalName.Length != 0 && stricmp(name, field.ExternalName) == 0) || (field.FieldName.Length != 0 && stricmp(name, field.FieldName) == 0))) {
-					td = field;
-					break;
-				}
-			}
-		}
-#endif
-		if (td == null)
-			return 0;
-
-		object? value = td.FieldInfo.GetValue(ent);
-
+	static int PushInternalVariableToLua(BaseEntity ent, TypeDescription td, object? value) {
 		switch (td.FieldType) {
 			case FieldType.Float:
 			case FieldType.Double:
@@ -1527,14 +1502,16 @@ public static partial class LuaEntity
 				return 1;
 			case FieldType.Color32: {
 					Color color = (Color)value!;
-					lua.PushString($"{color.R} {color.G} {color.B} {color.A}");
+					g_Lua!.PushString($"{color.R} {color.G} {color.B} {color.A}");
 					return 1;
 				}
 			case FieldType.ModelIndex: {
 					Model? model = modelinfo.GetModel(Convert.ToInt32(value));
-					if (model == null)
+					if (model == null) {
+						g_Lua!.PushNil();
 						return 0;
-					lua.PushString(modelinfo.GetModelName(model));
+					}
+					g_Lua!.PushString(modelinfo.GetModelName(model));
 					return 1;
 				}
 			case FieldType.MaterialIndex: {
@@ -1543,15 +1520,98 @@ public static partial class LuaEntity
 #else
 					ReadOnlySpan<char> material = GameInterface.GetMaterialNameFromIndex(Convert.ToInt32(value));
 #endif
-					if (material.IsEmpty)
+					if (material.IsEmpty) {
+						g_Lua!.PushNil();
 						return 0;
-					lua.PushString(material);
+					}
+					g_Lua!.PushString(material);
 					return 1;
 				}
 		}
+
+		g_Lua!.PushNil();
 		return 0;
 	}
 
+	[LuaMethod]
+	static int Entity__GetInternalVariable(ILuaInterface lua) {
+		BaseEntity ent = Get_Entity(1, false)!;
+		string name = lua.CheckString(2);
+
+		TypeDescription? td = null;
+		for (DataMap? map = ent.GetDataDescMap(); map != null && td == null; map = map.BaseMap) {
+			foreach (TypeDescription field in map.DataDesc) {
+				bool isValue = field.Flags != FieldTypeDescFlags.Input && (field.Flags & FieldTypeDescFlags.Output) == 0 && (field.Flags & FieldTypeDescFlags.FunctionTable) == 0;
+				bool nameMatches = (field.Accessor.NetworkName.Length != 0 && stricmp(name, field.Accessor.NetworkName) == 0) || (field.ExternalName.Length != 0 && stricmp(name, field.ExternalName) == 0) || (field.FieldName.Length != 0 && stricmp(name, field.FieldName) == 0);
+				if (isValue && nameMatches) {
+					td = field;
+					break;
+				}
+			}
+		}
+#if CLIENT_DLL
+		for (DataMap? map = ent.GetPredDescMap(); map != null && td == null; map = map.BaseMap) {
+			foreach (TypeDescription field in map.DataDesc) {
+				bool isValue = field.Flags != FieldTypeDescFlags.Input && (field.Flags & FieldTypeDescFlags.Output) == 0 && (field.Flags & FieldTypeDescFlags.FunctionTable) == 0;
+				bool nameMatches = (field.Accessor.NetworkName.Length != 0 && stricmp(name, field.Accessor.NetworkName) == 0) || (field.ExternalName.Length != 0 && stricmp(name, field.ExternalName) == 0) || (field.FieldName.Length != 0 && stricmp(name, field.FieldName) == 0);
+				if (isValue && nameMatches) {
+					td = field;
+					break;
+				}
+			}
+		}
+#endif
+		if (td == null)
+			return 0;
+
+		object? value = td.FieldInfo.GetValue(ent);
+
+		return PushInternalVariableToLua(ent, td, value);
+	}
+
+	[LuaMethod]
+	static int Entity__GetSaveTable(ILuaInterface lua) {
+		BaseEntity ent = Get_Entity(1, false)!;
+
+		lua.CreateTable();
+
+		for (DataMap? map = ent.GetDataDescMap(); map != null; map = map.BaseMap) {
+			foreach (TypeDescription field in map.DataDesc) {
+				if (field.Flags != FieldTypeDescFlags.Input && (field.Flags & FieldTypeDescFlags.Output) == 0 && (field.Flags & FieldTypeDescFlags.FunctionTable) == 0) {
+					string name = field.Accessor.NetworkName.Length != 0 ? field.Accessor.NetworkName : field.ExternalName.Length != 0 ? field.ExternalName : field.FieldName;
+					if (name.Length == 0)
+						continue;
+
+					object? value = field.FieldInfo.GetValue(ent);
+					if (value == null)
+						continue;
+
+					PushInternalVariableToLua(ent, field, value);
+					lua.SetField(-2, name);
+				}
+			}
+		}
+#if CLIENT_DLL
+		for (DataMap? map = ent.GetPredDescMap(); map != null; map = map.BaseMap) {
+			foreach (TypeDescription field in map.DataDesc) {
+				if (field.Flags != FieldTypeDescFlags.Input && (field.Flags & FieldTypeDescFlags.Output) == 0 && (field.Flags & FieldTypeDescFlags.FunctionTable) == 0) {
+					string name = field.Accessor.NetworkName.Length != 0 ? field.Accessor.NetworkName : field.ExternalName.Length != 0 ? field.ExternalName : field.FieldName;
+					if (name.Length == 0)
+						continue;
+
+					object? value = field.FieldInfo.GetValue(ent);
+					if (value == null)
+						continue;
+
+					PushInternalVariableToLua(ent, field, value);
+					lua.SetField(-2, name);
+				}
+			}
+		}
+#endif
+
+		return 1;
+	}
 
 	[LuaMethod]
 	static int Entity__GetGroundEntity(ILuaInterface lua) {

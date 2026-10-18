@@ -803,6 +803,25 @@ public static partial class LuaGlobalFunctions
 #endif
 #endif
 
+#if !MENU_DLL
+	// FIXME: make this not have to be copypasted?
+	public static BaseEntity? GMEntityByIndex(int index) {
+#if CLIENT_DLL
+		return cl_entitylist.GetBaseEntity(index);
+#else
+		if (index != 0)
+			return Util.EntityByIndex(index);
+		return GetWorldEntity();
+#endif
+	}
+
+	[LuaGlobal]
+	static int Entity(ILuaInterface lua) {
+		LuaEntity.Push_Entity(GMEntityByIndex((int)lua.GetNumber(1)));
+		return 1;
+	}
+#endif
+
 	public static void ReadStackFrom(ref LuaError error, ILuaInterface lua) {
 		error.Stack.Clear();
 		lua_Debug ar = default;
