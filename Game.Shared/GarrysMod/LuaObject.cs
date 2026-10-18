@@ -77,8 +77,8 @@ public class LuaObject : ILuaObject
 	public void SetFromStack(int i) => SetReference(i);
 
 	public void UnReference() {
-		if (reference != -1 && luaID == g_LuaID && luaID != -1)
-			g_Lua!.ReferenceFree(reference);
+		if (g_Lua != null && reference != -1 && luaID == g_LuaID && luaID != -1)
+			g_Lua.ReferenceFree(reference);
 		userData = false;
 		luaType = LuaType.None;
 		reference = -1;
